@@ -1,0 +1,20 @@
+package com.arhan.frugalcctv.domain
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class SignalMessage(
+    val type: String,
+    val from: String,
+    val to: String? = null,
+    val sdp: String? = null,
+    val candidate: String? = null,
+    val sdpMid: String? = null,
+    val sdpMLineIndex: Int? = null,
+    val armed: Boolean? = null,
+    val text: String? = null
+)
+
+data class IceConfig(val turnUrls: List<String> = emptyList(), val username: String = "", val password: String = "")
+data class SecuritySettings(val armed: Boolean = false, val confidenceThreshold: Float = 0.55f, val audibleAlarm: Boolean = false)
+enum class AppMode { HOME, CAMERA_SETUP, CAMERA, VIEWER_SETUP, VIEWER }
