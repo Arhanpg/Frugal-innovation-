@@ -13,12 +13,15 @@ class ThreatDetector(private val threshold: Float, private val onPerson: (Float)
     private val detector = ObjectDetection.getClient(ObjectDetectorOptions.Builder().setDetectorMode(ObjectDetectorOptions.STREAM_MODE).enableMultipleObjects().enableClassification().build())
     fun onFrame(frame: VideoFrame) {
         val now = System.currentTimeMillis(); if (now - lastRun < 1000L || busy.getAndSet(true)) return; lastRun = now
-        val buffer = frame.buffer.toI420()
+        val buffer = frame.buffer.toI420() ?: run { busy.set(false); return }
         try {
             val nv21 = toNv21(buffer)
             detector.process(InputImage.fromByteArray(nv21, buffer.width, buffer.height, frame.rotation, InputImage.IMAGE_FORMAT_NV21))
                 .addOnSuccessListener { objects -> objects.flatMap { it.labels }.filter { it.text.equals("person", true) }.maxOfOrNull { it.confidence }?.takeIf { it >= threshold }?.let(onPerson) }
                 .addOnFailureListener { Log.w("FrugalCCTV", "Detection failed", it) }.addOnCompleteListener { busy.set(false) }
+        } catch (e: Exception) {
+            Log.e("FrugalCCTV", "Process error", e)
+            busy.set(false)
         } finally { buffer.release() }
     }
     private fun toNv21(buffer: VideoFrame.I420Buffer): ByteArray {
