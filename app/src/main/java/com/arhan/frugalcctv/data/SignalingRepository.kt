@@ -14,16 +14,28 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.UUID
 
-class SignalingRepository(private val projectUrl: String, private val publishableKey: String, roomCode: String, private val scope: CoroutineScope) {
-    private val clientId = UUID.randomUUID().toString()
+class SignalingRepository(
+    private val projectUrl: String,
+    private val publishableKey: String,
+    roomCode: String,
+    private val scope: CoroutineScope,
+    stableClientId: String? = null
+) {
+    private val clientId = stableClientId ?: UUID.randomUUID().toString()
     private val supabase = createSupabaseClient(projectUrl, publishableKey) { install(Realtime) }
-    private val channel = supabase.channel("room:${roomCode.trim()}")
+    private val channel = supabase.channel("room:${roomCode.trim().uppercase()}")
     private var collector: Job? = null
     fun id() = clientId
 
     fun start(onMessage: (SignalMessage) -> Unit, onSubscribed: (() -> Unit)? = null) = scope.launch {
         val flow: Flow<SignalMessage> = channel.broadcastFlow(event = "signal")
-        collector = launch { flow.collect { message -> if (message.from != clientId && (message.to == null || message.to == clientId)) onMessage(message) } }
+        collector = launch {
+            flow.collect { message ->
+                val addressed = message.to == null || message.to == clientId
+                val ownSwitch = message.from == clientId && message.type == "switch_to_viewer"
+                if ((message.from != clientId && addressed) || ownSwitch) onMessage(message)
+            }
+        }
         channel.subscribe(blockUntilSubscribed = true)
         onSubscribed?.invoke()
     }
