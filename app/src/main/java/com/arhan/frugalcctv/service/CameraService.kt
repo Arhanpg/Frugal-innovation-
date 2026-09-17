@@ -43,21 +43,23 @@ class CameraService : Service() {
         if (rtc != null) return
         require(url.isNotBlank() && key.isNotBlank()) { "Supabase URL and publishable key are required" }
         settings = security
+        tone = ToneGenerator(AudioManager.STREAM_ALARM, 90)
+        signaling = SignalingRepository(url, key, room, scope)
         detector = ThreatDetector(settings.confidenceThreshold) { confidence ->
             if (!settings.armed) return@ThreatDetector
             val now = System.currentTimeMillis()
             if (now - lastAlert < 15_000L) return@ThreatDetector
             lastAlert = now
+            val text = "Person detected • ${(confidence * 100).toInt()}% confidence"
             scope.launch {
-                signaling?.send(SignalMessage("alert", signaling?.id() ?: "", text = "Person detected • ${(confidence * 100).toInt()}% confidence"))
+                signaling?.send(SignalMessage("alert", signaling?.id() ?: "", text = text))
                 if (settings.audibleAlarm) tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 800)
+                AlertNotifier.notify(this@CameraService, "FrugalCCTV alert", text, playTone = settings.audibleAlarm)
             }
         }
-        tone = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-        signaling = SignalingRepository(url, key, room, scope)
         rtc = WebRtcSession(this, true,
             onIce = { c -> scope.launch { signaling?.send(SignalMessage("ice", signaling?.id() ?: "", candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) } },
-            onRemoteVideo = {}, onConnection = { state(it) }, onFrame = { detector?.onFrame(it) }
+            onRemoteVideo = {}, onConnection = state, onFrame = { detector?.onFrame(it) }
         )
         preview?.let { rtc?.attachPreview(it) }
         signaling?.start { msg ->
@@ -65,8 +67,11 @@ class CameraService : Service() {
                 "hello" -> scope.launch { signaling?.send(SignalMessage("ready", signaling?.id() ?: "", to = msg.from)) }
                 "offer" -> {
                     rtc?.createPeer(ice)
-                    msg.sdp?.let { rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, it)) }
-                    rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } }
+                    msg.sdp?.let { sdp ->
+                        rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) {
+                            rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } }
+                        }
+                    }
                 }
                 "ice" -> msg.candidate?.let { rtc?.addIce(org.webrtc.IceCandidate(msg.sdpMid ?: "", msg.sdpMLineIndex ?: 0, it)) }
                 "arm" -> settings = settings.copy(armed = msg.armed ?: false)
