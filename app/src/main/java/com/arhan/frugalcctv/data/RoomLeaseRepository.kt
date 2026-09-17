@@ -15,32 +15,30 @@ import java.util.UUID
 class RoomLeaseRepository(
     private val projectUrl: String,
     private val publishableKey: String,
-    roomCode: String
+    roomCode: String,
+    stableCameraId: String? = null
 ) {
-    val cameraId: String = UUID.randomUUID().toString()
+    val cameraId: String = stableCameraId ?: UUID.randomUUID().toString()
     private val client = HttpClient(Android)
     private val normalizedRoom = roomCode.trim().uppercase()
 
     suspend fun claim(): Boolean = call("claim_cctv_room") == true
     suspend fun heartbeat(): Boolean? = call("heartbeat_cctv_room")
     suspend fun release(): Boolean? = call("release_cctv_room")
-
     fun close() = client.close()
 
-    private suspend fun call(function: String): Boolean? {
-        return runCatching {
-            val response = client.post("${projectUrl.trimEnd('/')}/rest/v1/rpc/$function") {
-                headers {
-                    append("apikey", publishableKey)
-                    append("Authorization", "Bearer $publishableKey")
-                }
-                contentType(ContentType.Application.Json)
-                setBody(buildJsonObject {
-                    put("p_room_code", normalizedRoom)
-                    put("p_camera_id", cameraId)
-                }.toString())
+    private suspend fun call(function: String): Boolean? = runCatching {
+        val response = client.post("${projectUrl.trimEnd('/')}/rest/v1/rpc/$function") {
+            headers {
+                append("apikey", publishableKey)
+                append("Authorization", "Bearer $publishableKey")
             }
-            response.bodyAsText().trim().equals("true", ignoreCase = true)
-        }.getOrNull()
-    }
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject {
+                put("p_room_code", normalizedRoom)
+                put("p_camera_id", cameraId)
+            }.toString())
+        }
+        response.bodyAsText().trim().equals("true", ignoreCase = true)
+    }.getOrNull()
 }
