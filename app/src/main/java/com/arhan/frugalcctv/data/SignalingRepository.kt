@@ -6,7 +6,7 @@ import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.broadcast
 import io.github.jan.supabase.realtime.broadcastFlow
-import io.github.jan.sup.supabase.realtime.channel
+import io.github.jan.supabase.realtime.channel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
