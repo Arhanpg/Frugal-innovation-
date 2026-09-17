@@ -27,36 +27,65 @@ class SignalingRepository(
     private val supabase = createSupabaseClient(projectUrl, publishableKey) { install(Realtime) }
     private val channel = supabase.channel("room:${roomCode.trim().uppercase()}")
     private var collector: Job? = null
+    private var retryJob: Job? = null
+
     fun id() = clientId
 
-    fun start(onMessage: (SignalMessage) -> Unit, onSubscribed: (() -> Unit)? = null) = scope.launch {
-        val flow: Flow<SignalMessage> = channel.broadcastFlow(event = "signal")
-        collector = launch {
-            flow.collect { message ->
-                val addressed = message.to == null || message.to == clientId
-                if (message.from != clientId && addressed) onMessage(message)
-            }
-        }
-        channel.subscribe(blockUntilSubscribed = true)
-        onSubscribed?.invoke()
-        // Broadcasts are ephemeral. Retry the viewer hello briefly so a camera
-        // that is still subscribing cannot miss the discovery message.
-        if (onSubscribed != null) {
-            repeat(5) {
-                delay(2_000L)
-                if (collector?.isActive == true) onSubscribed.invoke() else return@repeat
+    fun start(
+        onMessage: (SignalMessage) -> Unit,
+        onSubscribed: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        scope.launch {
+            try {
+                val flow: Flow<SignalMessage> = channel.broadcastFlow(event = "signal")
+                collector = launch {
+                    flow.collect { message ->
+                        val addressed = message.to == null || message.to == clientId
+                        if (message.from != clientId && addressed) {
+                            onMessage(message)
+                        }
+                    }
+                }
+
+                channel.subscribe(blockUntilSubscribed = true)
+                onSubscribed?.invoke()
+
+                // Broadcast messages are ephemeral. Repeat discovery briefly so a
+                // viewer can still find a camera that subscribed a little later.
+                retryJob?.cancel()
+                if (onSubscribed != null) {
+                    retryJob = launch {
+                        repeat(5) {
+                            delay(2_000L)
+                            if (!isActive || collector?.isActive != true) return@launch
+                            onSubscribed.invoke()
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                onError?.invoke(t.message ?: t::class.simpleName ?: "Realtime signaling failed")
             }
         }
     }
 
     suspend fun send(message: SignalMessage) {
         channel.broadcast(event = "signal", message = buildJsonObject {
-            put("type", message.type); put("from", message.from)
-            message.to?.let { put("to", it) }; message.sdp?.let { put("sdp", it) }
-            message.candidate?.let { put("candidate", it) }; message.sdpMid?.let { put("sdpMid", it) }
-            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }; message.armed?.let { put("armed", it) }; message.text?.let { put("text", it) }
+            put("type", message.type)
+            put("from", message.from)
+            message.to?.let { put("to", it) }
+            message.sdp?.let { put("sdp", it) }
+            message.candidate?.let { put("candidate", it) }
+            message.sdpMid?.let { put("sdpMid", it) }
+            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }
+            message.armed?.let { put("armed", it) }
+            message.text?.let { put("text", it) }
         })
     }
 
-    fun close() { collector?.cancel(); scope.launch { channel.unsubscribe() } }
+    fun close() {
+        retryJob?.cancel()
+        collector?.cancel()
+        scope.launch { runCatching { channel.unsubscribe() } }
+    }
 }
