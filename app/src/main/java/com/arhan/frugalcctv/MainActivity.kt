@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun bindAndStart() { val intent = Intent(this, CameraService::class.java); startForegroundService(intent); bindService(intent, connection, BIND_AUTO_CREATE); tryStartCamera() }
     private fun tryStartCamera() { val p = pendingCamera ?: return; if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return; cameraService?.start(p.second, p.third, p.first, IceConfig(), SecuritySettings(AppPreferences(this).armed(), audibleAlarm = AppPreferences(this).audible())) }
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) { super.onRequestPermissionsResult(requestCode, permissions, results); if (requestCode == 41 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) bindAndStart() }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, results: IntArray) { super.onRequestPermissionsResult(requestCode, permissions, results); if (requestCode == 41 && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) bindAndStart() }
     override fun onDestroy() { runCatching { unbindService(connection) }; super.onDestroy() }
 
     @Composable private fun AppRoot(service: CameraService?) {
