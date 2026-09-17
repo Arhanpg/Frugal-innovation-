@@ -1,6 +1,7 @@
 package com.arhan.frugalcctv.data
 
 import android.content.Context
+import java.util.UUID
 
 class AppPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("frugal_cctv", Context.MODE_PRIVATE)
@@ -15,4 +16,5 @@ class AppPreferences(context: Context) {
     fun armed() = prefs.getBoolean("armed", false)
     fun saveAudible(value: Boolean) = prefs.edit().putBoolean("audible", value).apply()
     fun audible() = prefs.getBoolean("audible", false)
+    fun deviceId(): String = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
 }
