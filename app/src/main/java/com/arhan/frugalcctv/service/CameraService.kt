@@ -9,6 +9,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.arhan.frugalcctv.data.AppPreferences
 import com.arhan.frugalcctv.data.RoomLeaseRepository
 import com.arhan.frugalcctv.data.SignalingRepository
 import com.arhan.frugalcctv.domain.IceConfig
@@ -51,7 +52,8 @@ class CameraService : Service() {
         roomCode = room.trim().uppercase()
         settings = security
         tone = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-        val roomLease = RoomLeaseRepository(url, key, roomCode!!)
+        val deviceId = AppPreferences(this).deviceId()
+        val roomLease = RoomLeaseRepository(url, key, roomCode!!, deviceId)
         lease = roomLease
         scope.launch {
             val claimed = roomLease.claim()
@@ -72,12 +74,12 @@ class CameraService : Service() {
                     }
                 }
             }
-            startStreaming(url, key, roomCode!!, ice, state)
+            startStreaming(url, key, roomCode!!, ice, state, deviceId)
         }
     }
 
-    private fun startStreaming(url: String, key: String, room: String, ice: IceConfig, state: (PeerConnection.IceConnectionState) -> Unit) {
-        signaling = SignalingRepository(url, key, room, scope)
+    private fun startStreaming(url: String, key: String, room: String, ice: IceConfig, state: (PeerConnection.IceConnectionState) -> Unit, deviceId: String) {
+        signaling = SignalingRepository(url, key, room, scope, deviceId)
         detector = ThreatDetector(settings.confidenceThreshold) { event ->
             if (!settings.armed) return@ThreatDetector
             val now = System.currentTimeMillis()
@@ -96,6 +98,7 @@ class CameraService : Service() {
         preview?.let { rtc?.attachPreview(it) }
         signaling?.start(onMessage = { msg ->
             when (msg.type) {
+                "switch_to_viewer" -> stopCamera()
                 "hello" -> scope.launch { signaling?.send(SignalMessage("ready", signaling?.id() ?: "", to = msg.from)) }
                 "offer" -> {
                     rtc?.createPeer(ice)
@@ -118,13 +121,9 @@ class CameraService : Service() {
     fun isAudible() = settings.audibleAlarm
 
     fun stopCamera() {
-        if (!running) {
-            stopSelf()
-            return
-        }
+        if (!running) { stopSelf(); return }
         running = false
-        heartbeatJob?.cancel()
-        heartbeatJob = null
+        heartbeatJob?.cancel(); heartbeatJob = null
         val currentLease = lease
         scope.launch {
             currentLease?.release()
@@ -147,9 +146,7 @@ class CameraService : Service() {
         running = false
         heartbeatJob?.cancel()
         val currentLease = lease
-        if (currentLease != null) {
-            scope.launch { currentLease.release(); currentLease.close() }
-        }
+        if (currentLease != null) scope.launch { currentLease.release(); currentLease.close() }
         stopCameraResources()
         scope.cancel()
         super.onDestroy()
