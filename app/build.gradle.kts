@@ -7,9 +7,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-val localProps = Properties().apply {
-    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
-}
+val localProps = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load) }
 fun localValue(name: String) = localProps.getProperty(name, "")
 
 android {
@@ -19,8 +17,8 @@ android {
         applicationId = "com.arhan.frugalcctv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
         buildConfigField("String", "DEFAULT_SUPABASE_URL", "\"${localValue("FRUGAL_SUPABASE_URL")}\"")
         buildConfigField("String", "DEFAULT_SUPABASE_KEY", "\"${localValue("FRUGAL_SUPABASE_KEY")}\"")
     }
@@ -40,6 +38,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("io.github.webrtc-sdk:android:144.7559.09")
     implementation(platform("io.github.jan-tennert.supabase:bom:3.0.2"))
