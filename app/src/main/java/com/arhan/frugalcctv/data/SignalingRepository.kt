@@ -17,13 +17,14 @@ import java.util.UUID
 class SignalingRepository(private val projectUrl: String, private val publishableKey: String, roomCode: String, private val scope: CoroutineScope) {
     private val clientId = UUID.randomUUID().toString()
     private val supabase = createSupabaseClient(projectUrl, publishableKey) { install(Realtime) }
-    private val channel = supabase.channel("room:$roomCode")
+    private val channel = supabase.channel("room:${roomCode.trim()}")
     private var collector: Job? = null
     fun id() = clientId
     fun start(onMessage: (SignalMessage) -> Unit) = scope.launch {
         val flow: Flow<SignalMessage> = channel.broadcastFlow(event = "signal")
         collector = launch { flow.collect { message -> if (message.from != clientId && (message.to == null || message.to == clientId)) onMessage(message) } }
         channel.subscribe(blockUntilSubscribed = true)
+        send(SignalMessage(type = "ready", from = clientId))
     }
     suspend fun send(message: SignalMessage) {
         channel.broadcast(event = "signal", message = buildJsonObject {
