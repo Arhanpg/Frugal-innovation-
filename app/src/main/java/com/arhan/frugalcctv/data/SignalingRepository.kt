@@ -1,11 +1,12 @@
 package com.arhan.frugalcctv.data
 
+import android.os.Process
 import com.arhan.frugalcctv.domain.SignalMessage
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.broadcast
 import io.github.jan.supabase.realtime.broadcastFlow
-import io.github.jan.supabase.realtime.channel
+import io.github.jan.sup.supabase.realtime.channel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -21,7 +22,7 @@ class SignalingRepository(
     private val scope: CoroutineScope,
     stableClientId: String? = null
 ) {
-    private val clientId = stableClientId ?: UUID.randomUUID().toString()
+    private val clientId = stableClientId ?: Process.myPid().toString().ifBlank { UUID.randomUUID().toString() }
     private val supabase = createSupabaseClient(projectUrl, publishableKey) { install(Realtime) }
     private val channel = supabase.channel("room:${roomCode.trim().uppercase()}")
     private var collector: Job? = null
@@ -37,7 +38,13 @@ class SignalingRepository(
             }
         }
         channel.subscribe(blockUntilSubscribed = true)
-        onSubscribed?.invoke()
+        if (onSubscribed != null) {
+            channel.broadcast(event = "signal", message = buildJsonObject {
+                put("type", "switch_to_viewer")
+                put("from", clientId)
+            })
+            onSubscribed.invoke()
+        }
     }
 
     suspend fun send(message: SignalMessage) {
