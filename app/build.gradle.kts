@@ -17,8 +17,8 @@ android {
         applicationId = "com.arhan.frugalcctv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         buildConfigField("String", "DEFAULT_SUPABASE_URL", "\"${localValue("FRUGAL_SUPABASE_URL")}\"")
         buildConfigField("String", "DEFAULT_SUPABASE_KEY", "\"${localValue("FRUGAL_SUPABASE_KEY")}\"")
     }
@@ -44,7 +44,7 @@ dependencies {
     implementation(platform("io.github.jan-tennert.supabase:bom:3.0.2"))
     implementation("io.github.jan-tennert.supabase:realtime-kt")
     implementation("io.ktor:ktor-client-android:3.0.1")
-    implementation("com.google.mlkit:object-detection:17.0.2")
+    implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }
