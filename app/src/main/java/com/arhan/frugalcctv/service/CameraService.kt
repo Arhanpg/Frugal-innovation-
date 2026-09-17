@@ -53,7 +53,6 @@ class CameraService : Service() {
             val text = "Person detected • ${(confidence * 100).toInt()}% confidence"
             scope.launch {
                 signaling?.send(SignalMessage("alert", signaling?.id() ?: "", text = text))
-                if (settings.audibleAlarm) tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 800)
                 AlertNotifier.notify(this@CameraService, "FrugalCCTV alert", text, playTone = settings.audibleAlarm)
             }
         }
@@ -68,7 +67,9 @@ class CameraService : Service() {
                 "offer" -> {
                     rtc?.createPeer(ice)
                     msg.sdp?.let { sdp ->
-                        rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) {
+                        rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp))
+                        scope.launch {
+                            delay(250)
                             rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } }
                         }
                     }
