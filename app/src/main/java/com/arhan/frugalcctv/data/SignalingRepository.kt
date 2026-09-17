@@ -33,27 +33,29 @@ class SignalingRepository(
         collector = launch {
             flow.collect { message ->
                 val addressed = message.to == null || message.to == clientId
-                val ownSwitch = message.from == clientId && message.type == "switch_to_viewer"
-                if ((message.from != clientId && addressed) || ownSwitch) onMessage(message)
+                if (message.from != clientId && addressed) onMessage(message)
             }
         }
         channel.subscribe(blockUntilSubscribed = true)
-        if (onSubscribed != null) {
-            channel.broadcast(event = "signal", message = buildJsonObject {
-                put("type", "switch_to_viewer")
-                put("from", clientId)
-            })
-            onSubscribed.invoke()
-        }
+        onSubscribed?.invoke()
     }
 
     suspend fun send(message: SignalMessage) {
         channel.broadcast(event = "signal", message = buildJsonObject {
-            put("type", message.type); put("from", message.from)
-            message.to?.let { put("to", it) }; message.sdp?.let { put("sdp", it) }
-            message.candidate?.let { put("candidate", it) }; message.sdpMid?.let { put("sdpMid", it) }
-            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }; message.armed?.let { put("armed", it) }; message.text?.let { put("text", it) }
+            put("type", message.type)
+            put("from", message.from)
+            message.to?.let { put("to", it) }
+            message.sdp?.let { put("sdp", it) }
+            message.candidate?.let { put("candidate", it) }
+            message.sdpMid?.let { put("sdpMid", it) }
+            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }
+            message.armed?.let { put("armed", it) }
+            message.text?.let { put("text", it) }
         })
     }
-    fun close() { collector?.cancel(); scope.launch { channel.unsubscribe() } }
+
+    fun close() {
+        collector?.cancel()
+        scope.launch { channel.unsubscribe() }
+    }
 }
