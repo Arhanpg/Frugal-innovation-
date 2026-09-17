@@ -13,7 +13,7 @@ class AppPreferences(context: Context) {
     fun saveConnection(url: String, key: String) = prefs.edit().putString("supabase_url", url.trimEnd('/')).putString("supabase_key", key.trim()).apply()
     fun saveTurn(urls: String, username: String, password: String) = prefs.edit().putString("turn_urls", urls).putString("turn_user", username).putString("turn_password", password).apply()
     fun saveArmed(armed: Boolean) = prefs.edit().putBoolean("armed", armed).apply()
-    fun armed() = prefs.getBoolean("armed", false)
+    fun armed() = prefs.getBoolean("armed", true)
     fun saveAudible(value: Boolean) = prefs.edit().putBoolean("audible", value).apply()
     fun audible() = prefs.getBoolean("audible", false)
     fun deviceId(): String = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
