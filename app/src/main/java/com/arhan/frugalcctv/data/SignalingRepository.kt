@@ -9,11 +9,12 @@ import io.github.jan.supabase.realtime.broadcastFlow
 import io.github.jan.supabase.realtime.channel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import java.util.UUID
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.UUID
 
 class SignalingRepository(
     private val projectUrl: String,
@@ -38,6 +39,14 @@ class SignalingRepository(
         }
         channel.subscribe(blockUntilSubscribed = true)
         onSubscribed?.invoke()
+        // Broadcasts are ephemeral. Retry the viewer hello briefly so a camera
+        // that is still subscribing cannot miss the discovery message.
+        if (onSubscribed != null) {
+            repeat(5) {
+                delay(2_000L)
+                if (collector?.isActive == true) onSubscribed.invoke() else return@repeat
+            }
+        }
     }
 
     suspend fun send(message: SignalMessage) {
