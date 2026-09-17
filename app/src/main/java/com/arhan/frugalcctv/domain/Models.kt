@@ -17,4 +17,6 @@ data class SignalMessage(
 
 data class IceConfig(val turnUrls: List<String> = emptyList(), val username: String = "", val password: String = "")
 data class SecuritySettings(val armed: Boolean = false, val confidenceThreshold: Float = 0.55f, val audibleAlarm: Boolean = false)
+data class SecurityEvent(val message: String, val severity: Severity = Severity.WARNING)
+enum class Severity { INFO, WARNING, CRITICAL }
 enum class AppMode { HOME, CAMERA_SETUP, CAMERA, VIEWER_SETUP, VIEWER }
