@@ -61,15 +61,13 @@ class CameraService : Service() {
             onRemoteVideo = {}, onConnection = state, onFrame = { detector?.onFrame(it) }
         )
         preview?.let { rtc?.attachPreview(it) }
-        signaling?.start { msg ->
+        signaling?.start(onMessage = { msg ->
             when (msg.type) {
                 "hello" -> scope.launch { signaling?.send(SignalMessage("ready", signaling?.id() ?: "", to = msg.from)) }
                 "offer" -> {
                     rtc?.createPeer(ice)
                     msg.sdp?.let { sdp ->
-                        rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp))
-                        scope.launch {
-                            delay(250)
+                        rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) {
                             rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } }
                         }
                     }
@@ -77,11 +75,12 @@ class CameraService : Service() {
                 "ice" -> msg.candidate?.let { rtc?.addIce(org.webrtc.IceCandidate(msg.sdpMid ?: "", msg.sdpMLineIndex ?: 0, it)) }
                 "arm" -> settings = settings.copy(armed = msg.armed ?: false)
             }
-        }
+        })
     }
     fun attachPreview(view: SurfaceViewRenderer) { preview = view; rtc?.attachPreview(view) }
     fun setArmed(value: Boolean) { settings = settings.copy(armed = value) }
     fun setAudible(value: Boolean) { settings = settings.copy(audibleAlarm = value) }
     fun isArmed() = settings.armed
+    fun isAudible() = settings.audibleAlarm
     override fun onDestroy() { rtc?.release(); signaling?.close(); detector?.close(); tone?.release(); preview = null; scope.cancel(); super.onDestroy() }
 }

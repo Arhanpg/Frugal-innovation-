@@ -39,11 +39,13 @@ class WebRtcSession(
     init { if (captureCamera) startCamera(context.applicationContext) }
 
     fun attachPreview(view: SurfaceViewRenderer) {
+        if (preview === view) return
         preview?.let { old -> track?.removeSink(old); remoteTrack?.removeSink(old); old.release() }
         preview = view
         val egl = getEglContext() ?: return
         view.init(egl, null); view.setEnableHardwareScaler(true); view.setMirror(false)
-        (track ?: remoteTrack)?.addSink(view)
+        track?.addSink(view)
+        remoteTrack?.addSink(view)
     }
 
     private fun startCamera(context: Context) {
@@ -72,7 +74,7 @@ class WebRtcSession(
     private fun observer() = object : PeerConnection.Observer {
         override fun onIceCandidate(c: IceCandidate) = onIce(c)
         override fun onTrack(t: RtpTransceiver?) {
-            (t?.receiver?.track() as? VideoTrack)?.let { video -> remoteTrack = video; preview?.let { video.addSink(it) }; onRemoteVideo(video) }
+            (t?.receiver?.track() as? VideoTrack)?.let { video -> remoteTrack = video; video.setEnabled(true); preview?.let { video.addSink(it) }; onRemoteVideo(video) }
         }
         override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) = onConnection(s)
         override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
@@ -86,7 +88,7 @@ class WebRtcSession(
     }
     fun createOffer(done: (SessionDescription) -> Unit) { peer?.createOffer(object : SdpObserverAdapter() { override fun onCreateSuccess(d: SessionDescription) { peer?.setLocalDescription(this, d); done(d) } }, MediaConstraints()) }
     fun createAnswer(done: (SessionDescription) -> Unit) { peer?.createAnswer(object : SdpObserverAdapter() { override fun onCreateSuccess(d: SessionDescription) { peer?.setLocalDescription(this, d); done(d) } }, MediaConstraints()) }
-    fun setRemote(d: SessionDescription) { peer?.setRemoteDescription(object : SdpObserverAdapter() { override fun onSetSuccess() { remoteSet = true; queuedIce.forEach { peer?.addIceCandidate(it) }; queuedIce.clear() } }, d) }
+    fun setRemote(d: SessionDescription, onSuccess: (() -> Unit)? = null) { peer?.setRemoteDescription(object : SdpObserverAdapter() { override fun onSetSuccess() { remoteSet = true; queuedIce.forEach { peer?.addIceCandidate(it) }; queuedIce.clear(); onSuccess?.invoke() } override fun onSetFailure(e: String?) { } }, d) }
     fun addIce(c: IceCandidate) { if (remoteSet) peer?.addIceCandidate(c) else queuedIce += c }
     fun release() { try { camera?.stopCapture() } catch (_: Exception) {}; camera?.dispose(); helper?.dispose(); preview?.release(); track?.dispose(); remoteTrack?.dispose(); source?.dispose(); peer?.dispose(); preview = null; peer = null }
 }
