@@ -11,9 +11,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import java.util.UUID
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.util.UUID
 
 class SignalingRepository(
     private val projectUrl: String,
@@ -42,20 +42,12 @@ class SignalingRepository(
 
     suspend fun send(message: SignalMessage) {
         channel.broadcast(event = "signal", message = buildJsonObject {
-            put("type", message.type)
-            put("from", message.from)
-            message.to?.let { put("to", it) }
-            message.sdp?.let { put("sdp", it) }
-            message.candidate?.let { put("candidate", it) }
-            message.sdpMid?.let { put("sdpMid", it) }
-            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }
-            message.armed?.let { put("armed", it) }
-            message.text?.let { put("text", it) }
+            put("type", message.type); put("from", message.from)
+            message.to?.let { put("to", it) }; message.sdp?.let { put("sdp", it) }
+            message.candidate?.let { put("candidate", it) }; message.sdpMid?.let { put("sdpMid", it) }
+            message.sdpMLineIndex?.let { put("sdpMLineIndex", it) }; message.armed?.let { put("armed", it) }; message.text?.let { put("text", it) }
         })
     }
 
-    fun close() {
-        collector?.cancel()
-        scope.launch { channel.unsubscribe() }
-    }
+    fun close() { collector?.cancel(); scope.launch { channel.unsubscribe() } }
 }
