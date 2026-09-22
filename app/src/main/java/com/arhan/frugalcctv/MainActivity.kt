@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun ViewerScreen(room: String, url: String, key: String, back: () -> Unit) {
-    val ctx = LocalContext.current; var status by remember { mutableStateOf("Connecting to signaling…") }; var alert by remember { mutableStateOf<String?>(null) }; var armed by remember { mutableStateOf(false) }; var controller by remember { mutableStateOf<ViewerController?>(null)
+    val ctx = LocalContext.current; var status by remember { mutableStateOf("Connecting to signaling…") }; var alert by remember { mutableStateOf<String?>(null) }; var armed by remember { mutableStateOf(false) }; var controller by remember { mutableStateOf<ViewerController?>(null) }
     LaunchedEffect(Unit) { ensureNotificationPermission(ctx) }
     DisposableEffect(room, url, key) {
         val current = ViewerController(ctx, url, key, room, { status = it }, { text -> alert = text; AlertNotifier.notify(ctx, "FrugalCCTV alert", text, playTone = true) }, { armed = it })
