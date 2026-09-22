@@ -68,7 +68,12 @@ class CameraService : Service() {
         }
         rtc = WebRtcSession(this, true,
             onIce = { c -> scope.launch { signaling?.send(SignalMessage("ice", signaling?.id() ?: "", candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) } },
-            onRemoteVideo = {}, onConnection = state, onFrame = { detector?.onFrame(it) }, onError = { failStart(it) })
+            onRemoteVideo = {},
+            onConnection = state,
+            onFrame = { detector?.onFrame(it) },
+            onError = { android.util.Log.e("FrugalCCTV", "WebRTC error: $it") },
+            onFatalError = { failStart(it) }
+        )
         preview?.let { rtc?.attachPreview(it) }
         signaling?.start(onMessage = { msg ->
             when (msg.type) {
