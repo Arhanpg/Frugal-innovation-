@@ -11,7 +11,8 @@ class WebRtcSession(
     private val onRemoteVideo: (VideoTrack) -> Unit,
     private val onConnection: (PeerConnection.IceConnectionState) -> Unit,
     private val onFrame: ((VideoFrame) -> Unit)? = null,
-    private val onError: (String) -> Unit = {}
+    private val onError: (String) -> Unit = {},
+    private val onFatalError: (String) -> Unit = onError
 ) {
     companion object {
         private var initialized = false
@@ -100,11 +101,11 @@ class WebRtcSession(
                 ?: throw IllegalStateException("Unable to create camera texture helper")
 
             camera!!.initialize(helper, context, source!!.capturerObserver)
-            camera!!.startCapture(960, 540, 20)
+            camera!!.startCapture(640, 360, 20)
             preview?.let { track?.addSink(it) }
         } catch (e: Exception) {
             Log.e("FrugalCCTV", "Camera capture startup failed", e)
-            onError("Camera capture failed: ${e.message ?: e::class.simpleName}")
+            onFatalError("Camera capture failed: " + (e.message ?: e::class.simpleName ?: "unknown error"))
             release()
         }
     }
@@ -235,6 +236,19 @@ class WebRtcSession(
         } else if (!current.addIceCandidate(c)) {
             Log.w("FrugalCCTV", "Failed to add ICE candidate")
         }
+    }
+
+    fun resetPeer() {
+        queuedIce.clear()
+        remoteSet = false
+        remoteTrack?.let { old ->
+            preview?.let { view -> runCatching { old.removeSink(view) } }
+            runCatching { old.dispose() }
+        }
+        remoteTrack = null
+        runCatching { peer?.close() }
+        runCatching { peer?.dispose() }
+        peer = null
     }
 
     fun release() {
