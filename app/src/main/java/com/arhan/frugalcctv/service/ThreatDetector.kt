@@ -28,19 +28,19 @@ class ThreatDetector(private val threshold: Float, private val onEvent: (Securit
 
     private val labeler = ImageLabeling.getClient(
         ImageLabelerOptions.Builder()
-            .setConfidenceThreshold(0.45f)
+            .setConfidenceThreshold(0.25f)
             .build()
     )
 
     fun onFrame(frame: VideoFrame) {
         val now = System.currentTimeMillis()
-        if (now - lastRun < 700L || busy.getAndSet(true)) return
+        if (now - lastRun < 160L || busy.getAndSet(true)) return
         lastRun = now
         val buffer = frame.buffer.toI420() ?: run { busy.set(false); return }
         try {
-            val nv21 = toNv21(buffer)
+            val nv21 = toNv21(buffer, 256, 144)
             analyzeTamper(buffer.dataY, buffer.strideY, buffer.width, buffer.height, now)
-            labeler.process(InputImage.fromByteArray(nv21, buffer.width, buffer.height, frame.rotation, InputImage.IMAGE_FORMAT_NV21))
+            labeler.process(InputImage.fromByteArray(nv21, 256, 144, frame.rotation, InputImage.IMAGE_FORMAT_NV21))
                 .addOnSuccessListener { labels ->
                     val person = labels.firstOrNull { it.text.equals("Person", ignoreCase = true) }
                     if (person != null && person.confidence >= threshold) {
@@ -80,13 +80,13 @@ class ThreatDetector(private val threshold: Float, private val onEvent: (Securit
             val changeRatio = changed.toDouble() / sample.size
             if (changeRatio > 0.62) {
                 if (motionSince == 0L) motionSince = now
-                if (now - motionSince > 1_800L) emitTamper("Camera moved or its view changed suddenly")
+                if (now - motionSince > 400L) emitTamper("Camera moved or its view changed suddenly")
             } else motionSince = 0L
         }
 
         if (avg < 8.0) {
             if (darkSince == 0L) darkSince = now
-            if (now - darkSince > 2_500L) emitTamper("Camera view is unusually dark — possible lens obstruction")
+            if (now - darkSince > 400L) emitTamper("Camera view is unusually dark — possible lens obstruction")
         } else darkSince = 0L
 
         val variance = sample.map { it.toInt() and 0xFF }.let { values ->
@@ -95,7 +95,7 @@ class ThreatDetector(private val threshold: Float, private val onEvent: (Securit
         }
         if (avg < 18.0 && variance < 14.0) {
             if (obstructionSince == 0L) obstructionSince = now
-            if (now - obstructionSince > 2_000L) emitTamper("Camera lens may be covered or obstructed")
+            if (now - obstructionSince > 500L) emitTamper("Camera lens may be covered or obstructed")
         } else obstructionSince = 0L
 
         previousLuma = sample
@@ -108,18 +108,25 @@ class ThreatDetector(private val threshold: Float, private val onEvent: (Securit
         onEvent(SecurityEvent("TAMPER WARNING • $message", Severity.WARNING))
     }
 
-    private fun toNv21(buffer: VideoFrame.I420Buffer): ByteArray {
-        val w = buffer.width
-        val h = buffer.height
-        val out = ByteArray(w * h + w * h / 2)
-        copyPlane(buffer.dataY, buffer.strideY, out, 0, w, h)
-        var dst = w * h
-        for (row in 0 until h / 2) {
-            val u = buffer.dataU.position() + row * buffer.strideU
-            val v = buffer.dataV.position() + row * buffer.strideV
-            for (col in 0 until w / 2) {
-                out[dst++] = buffer.dataV.get(v + col)
-                out[dst++] = buffer.dataU.get(u + col)
+    private fun toNv21(buffer: VideoFrame.I420Buffer, outW: Int, outH: Int): ByteArray {
+        val out = ByteArray(outW * outH + outW * outH / 2)
+        for (y in 0 until outH) {
+            val sy = y * buffer.height / outH
+            val row = buffer.dataY.position() + sy * buffer.strideY
+            for (x in 0 until outW) {
+                val sx = x * buffer.width / outW
+                out[y * outW + x] = buffer.dataY.get(row + sx)
+            }
+        }
+        var dst = outW * outH
+        for (y in 0 until outH / 2) {
+            val sy = y * (buffer.height / 2) / (outH / 2)
+            val u = buffer.dataU.position() + sy * buffer.strideU
+            val v = buffer.dataV.position() + sy * buffer.strideV
+            for (x in 0 until outW / 2) {
+                val sx = x * (buffer.width / 2) / (outW / 2)
+                out[dst++] = buffer.dataV.get(v + sx)
+                out[dst++] = buffer.dataU.get(u + sx)
             }
         }
         return out
