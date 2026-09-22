@@ -243,6 +243,7 @@ private class ViewerController(context: Context, url: String, key: String, room:
     fun start() {
         postState("Connecting to signaling…")
         signaling.start(
+            role = "viewer",
             onMessage = { message ->
                 when (message.type) {
                     "ready" -> {
@@ -251,6 +252,7 @@ private class ViewerController(context: Context, url: String, key: String, room:
                             activePeerId = message.from
                             postState("Camera found — negotiating video…")
                             runCatching {
+                                rtc.resetPeer()
                                 rtc.createPeer(IceConfig())
                                 rtc.createOffer { offer -> scope.launch {
                                     runCatching { signaling.send(SignalMessage("offer", signaling.id(), to = message.from, sdp = offer.description)) }
@@ -277,6 +279,20 @@ private class ViewerController(context: Context, url: String, key: String, room:
                     "arm" -> message.armed?.let(onArmed)
                 }
             },
+            onPresence = { states ->
+                val camera = states.firstOrNull {
+                    it.role == "camera" &&
+                        it.clientId != signaling.id()
+                }
+
+                if (camera != null && !negotiationStarted) {
+                    activePeerId = camera.clientId
+                    postState("Camera found — starting video…")
+                    sendHello(camera.clientId)
+                } else if (camera == null && !negotiationStarted) {
+                    postState("Signaling connected — looking for camera…")
+                }
+            },
             onSubscribed = {
                 postState("Signaling connected — looking for camera…")
                 scope.launch {
@@ -286,6 +302,23 @@ private class ViewerController(context: Context, url: String, key: String, room:
             },
             onError = { postState("Signaling failed: $it") }
         )
+    }
+
+    fun reconnect() {
+        negotiationStarted = false
+        rtc.resetPeer()
+        postState("Searching for camera…")
+        scope.launch {
+            runCatching {
+                signaling.send(
+                    SignalMessage(
+                        "hello",
+                        signaling.id(),
+                        to = activePeerId
+                    )
+                )
+            }
+        }
     }
 
     fun attachPreview(view: SurfaceViewRenderer) = rtc.attachPreview(view)
