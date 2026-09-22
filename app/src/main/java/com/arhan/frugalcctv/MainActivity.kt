@@ -240,6 +240,20 @@ private class ViewerController(context: Context, url: String, key: String, room:
 
     private fun postState(value: String) { scope.launch { onState(value) } }
 
+    private fun sendHello(toCameraId: String? = null) {
+        scope.launch {
+            runCatching {
+                signaling.send(
+                    SignalMessage(
+                        "hello",
+                        signaling.id(),
+                        to = toCameraId
+                    )
+                )
+            }.onFailure { postState("Signaling send failed: ${it.message ?: "hello failed"}") }
+        }
+    }
+
     fun start() {
         postState("Connecting to signaling…")
         signaling.start(

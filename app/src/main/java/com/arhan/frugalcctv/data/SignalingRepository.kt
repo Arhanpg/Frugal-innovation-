@@ -8,6 +8,7 @@ import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.broadcast
 import io.github.jan.supabase.realtime.broadcastFlow
 import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.presenceDataFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -70,7 +71,10 @@ class SignalingRepository(
                 }
 
                 channel.subscribe(blockUntilSubscribed = true)
-                channel.track(PresenceState(clientId, role))
+                channel.track(buildJsonObject {
+                    put("clientId", clientId)
+                    put("role", role)
+                })
                 onSubscribed?.invoke()
 
                 retryJob?.cancel()
