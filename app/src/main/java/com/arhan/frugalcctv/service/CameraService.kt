@@ -75,10 +75,10 @@ class CameraService : Service() {
             onFatalError = { failStart(it) }
         )
         preview?.let { rtc?.attachPreview(it) }
-        signaling?.start(onMessage = { msg ->
+        signaling?.start(role = "camera", onMessage = { msg ->
             when (msg.type) {
                 "hello" -> scope.launch { val sender = signaling ?: return@launch; sender.send(SignalMessage("ready", sender.id(), to = msg.from)); sender.send(SignalMessage("arm", sender.id(), to = msg.from, armed = settings.armed)) }
-                "offer" -> try { rtc?.createPeer(ice); msg.sdp?.let { sdp -> rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) { rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } } } } } catch (e: Exception) { failStart(e.message ?: "WebRTC negotiation failed") }
+                "offer" -> try { rtc?.resetPeer(); rtc?.createPeer(ice); msg.sdp?.let { sdp -> rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) { rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } } } } } catch (e: Exception) { failStart(e.message ?: "WebRTC negotiation failed") }
                 "ice" -> msg.candidate?.let { rtc?.addIce(org.webrtc.IceCandidate(msg.sdpMid ?: "", msg.sdpMLineIndex ?: 0, it)) }
                 "arm" -> settings = settings.copy(armed = msg.armed ?: false)
             }
