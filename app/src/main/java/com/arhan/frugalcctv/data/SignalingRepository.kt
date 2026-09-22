@@ -1,6 +1,7 @@
 package com.arhan.frugalcctv.data
 
 import android.os.Process
+import com.arhan.frugalcctv.domain.PresenceState
 import com.arhan.frugalcctv.domain.SignalMessage
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.realtime.Realtime
@@ -11,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -27,44 +29,66 @@ class SignalingRepository(
     private val supabase = createSupabaseClient(projectUrl, publishableKey) { install(Realtime) }
     private val channel = supabase.channel("room:${roomCode.trim().uppercase()}")
     private var collector: Job? = null
+    private var presenceCollector: Job? = null
     private var retryJob: Job? = null
 
     fun id() = clientId
 
     fun start(
+        role: String,
         onMessage: (SignalMessage) -> Unit,
+        onPresence: ((List<PresenceState>) -> Unit)? = null,
         onSubscribed: (() -> Unit)? = null,
         onError: ((String) -> Unit)? = null
     ) {
         scope.launch {
             try {
-                val flow: Flow<SignalMessage> = channel.broadcastFlow(event = "signal")
+                val flow: Flow<SignalMessage> =
+                    channel.broadcastFlow(event = "signal")
+
                 collector = launch {
                     flow.collect { message ->
-                        val addressed = message.to == null || message.to == clientId
+                        val addressed =
+                            message.to == null || message.to == clientId
+
                         if (message.from != clientId && addressed) {
                             onMessage(message)
                         }
                     }
                 }
 
+                if (onPresence != null) {
+                    val presenceFlow: Flow<List<PresenceState>> =
+                        channel.presenceDataFlow<PresenceState>()
+
+                    presenceCollector?.cancel()
+                    presenceCollector = launch {
+                        presenceFlow.collect { states ->
+                            onPresence(states)
+                        }
+                    }
+                }
+
                 channel.subscribe(blockUntilSubscribed = true)
+                channel.track(PresenceState(clientId, role))
                 onSubscribed?.invoke()
 
-                // Broadcast messages are ephemeral. Repeat discovery briefly so a
-                // viewer can still find a camera that subscribed a little later.
                 retryJob?.cancel()
                 if (onSubscribed != null) {
                     retryJob = launch {
-                        repeat(5) {
-                            delay(2_000L)
-                            if (!isActive || collector?.isActive != true) return@launch
+                        repeat(6) {
+                            delay(1_000L)
+                            if (!isActive || collector?.isActive != true) {
+                                return@launch
+                            }
                             onSubscribed.invoke()
                         }
                     }
                 }
             } catch (t: Throwable) {
-                onError?.invoke(t.message ?: t::class.simpleName ?: "Realtime signaling failed")
+                onError?.invoke(
+                    t.message ?: t::class.simpleName ?: "Realtime signaling failed"
+                )
             }
         }
     }
@@ -85,7 +109,11 @@ class SignalingRepository(
 
     fun close() {
         retryJob?.cancel()
+        presenceCollector?.cancel()
         collector?.cancel()
-        scope.launch { runCatching { channel.unsubscribe() } }
+        scope.launch {
+            runCatching { channel.untrack() }
+            runCatching { channel.unsubscribe() }
+        }
     }
 }
