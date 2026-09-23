@@ -2,6 +2,7 @@ package com.arhan.frugalcctv.web
 
 import android.content.Context
 import android.util.Log
+import com.arhan.frugalcctv.domain.IceConfig
 import org.webrtc.*
 
 class WebRtcSession(
@@ -15,263 +16,176 @@ class WebRtcSession(
     private val onFatalError: (String) -> Unit = onError
 ) {
     companion object {
-        private var initialized = false
         private var factory: PeerConnectionFactory? = null
-        private var eglBase: EglBase? = null
-
-        @Synchronized
-        private fun getFactory(context: Context): PeerConnectionFactory {
-            if (!initialized) {
-                PeerConnectionFactory.initialize(
-                    PeerConnectionFactory.InitializationOptions
-                        .builder(context.applicationContext)
-                        .createInitializationOptions()
-                )
-                initialized = true
-            }
+        private var egl: EglBase? = null
+        @Synchronized private fun factory(context: Context): PeerConnectionFactory {
             if (factory == null) {
-                eglBase = EglBase.create()
+                PeerConnectionFactory.initialize(
+                    PeerConnectionFactory.InitializationOptions.builder(context.applicationContext).createInitializationOptions()
+                )
+                egl = EglBase.create()
                 factory = PeerConnectionFactory.builder()
-                    .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, true, true))
-                    .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase!!.eglBaseContext))
+                    .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl!!.eglBaseContext, true, true))
+                    .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl!!.eglBaseContext))
                     .createPeerConnectionFactory()
             }
             return factory!!
         }
-
-        fun getEglContext() = eglBase?.eglBaseContext
+        fun eglContext() = egl?.eglBaseContext
     }
 
-    private val rtcFactory = getFactory(context)
-    private var camera: CameraVideoCapturer? = null
+    private val f = factory(context)
+    private var capturer: CameraVideoCapturer? = null
     private var helper: SurfaceTextureHelper? = null
     private var source: VideoSource? = null
-    private var track: VideoTrack? = null
-    private var remoteTrack: VideoTrack? = null
+    private var local: VideoTrack? = null
+    private var remote: VideoTrack? = null
     private var peer: PeerConnection? = null
     private var preview: SurfaceViewRenderer? = null
-    private val queuedIce = mutableListOf<IceCandidate>()
+    private val queued = mutableListOf<IceCandidate>()
     private var remoteSet = false
 
-    init {
-        if (captureCamera) startCamera(context.applicationContext)
-    }
+    init { if (captureCamera) startCamera(context.applicationContext) }
 
     fun attachPreview(view: SurfaceViewRenderer) {
-        if (preview === view) return
-        preview?.let { old ->
-            runCatching { track?.removeSink(old) }
-            runCatching { remoteTrack?.removeSink(old) }
-            runCatching { old.release() }
-        }
+        preview?.let { old -> runCatching { local?.removeSink(old) }; runCatching { remote?.removeSink(old) }; runCatching { old.release() } }
         preview = view
-        val egl = getEglContext()
-        if (egl == null) {
-            onError("WebRTC renderer is not ready")
-            return
-        }
+        val e = eglContext() ?: return onError("WebRTC EGL is unavailable")
         runCatching {
-            view.init(egl, null)
+            view.init(e, null)
             view.setEnableHardwareScaler(true)
             view.setMirror(captureCamera)
-            track?.addSink(view)
-            remoteTrack?.addSink(view)
-        }.onFailure { e ->
-            onError("Video renderer failed: ${e.message ?: "unknown renderer error"}")
-        }
+            local?.addSink(view)
+            remote?.addSink(view)
+        }.onFailure { onError("Renderer failed: " + (it.message ?: "unknown")) }
     }
 
     private fun startCamera(context: Context) {
         try {
-            source = rtcFactory.createVideoSource(false)
-            track = rtcFactory.createVideoTrack("FRUGAL_VIDEO", source)
-            onFrame?.let { sink -> track?.addSink(sink) }
-
-            val enumerator = Camera2Enumerator(context)
-            val name = enumerator.deviceNames
-                .firstOrNull { enumerator.isBackFacing(it) }
-                ?: enumerator.deviceNames.firstOrNull()
-                ?: throw IllegalStateException("No camera was found on this device")
-
-            camera = enumerator.createCapturer(name, null) as? CameraVideoCapturer
-                ?: throw IllegalStateException("Unable to create the camera capturer")
-
-            val egl = getEglContext() ?: throw IllegalStateException("WebRTC EGL context is unavailable")
-            helper = SurfaceTextureHelper.create("FrugalCCTV-Camera", egl)
-                ?: throw IllegalStateException("Unable to create camera texture helper")
-
-            camera!!.initialize(helper, context, source!!.capturerObserver)
-            camera!!.startCapture(640, 360, 20)
-            preview?.let { track?.addSink(it) }
-        } catch (e: Exception) {
-            Log.e("FrugalCCTV", "Camera capture startup failed", e)
-            onFatalError("Camera capture failed: " + (e.message ?: e::class.simpleName ?: "unknown error"))
+            source = f.createVideoSource(false)
+            local = f.createVideoTrack("FRUGAL_VIDEO", source)
+            onFrame?.let { local?.addSink(it) }
+            val e = Camera2Enumerator(context)
+            val name = e.deviceNames.firstOrNull { e.isBackFacing(it) } ?: e.deviceNames.firstOrNull() ?: error("No camera found")
+            capturer = e.createCapturer(name, null) as? CameraVideoCapturer ?: error("Cannot create camera capturer")
+            helper = SurfaceTextureHelper.create("FrugalCCTV-Camera", eglContext() ?: error("No EGL context"))
+            capturer!!.initialize(helper, context, source!!.capturerObserver)
+            capturer!!.startCapture(640, 360, 20)
+            preview?.let { local?.addSink(it) }
+        } catch (t: Throwable) {
+            Log.e("FrugalCCTV", "Camera capture failed", t)
+            onFatalError("Camera capture failed: " + (t.message ?: "unknown"))
             release()
         }
     }
 
-    fun createPeer(ice: com.arhan.frugalcctv.domain.IceConfig): PeerConnection {
+    fun createPeer(ice: IceConfig = IceConfig()): PeerConnection {
         peer?.let { return it }
-        try {
-            val servers = mutableListOf(
-                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
-            )
-            if (ice.turnUrls.isNotEmpty()) {
-                servers += PeerConnection.IceServer.builder(ice.turnUrls)
-                    .setUsername(ice.username)
-                    .setPassword(ice.password)
-                    .createIceServer()
-            }
-
-            val config = PeerConnection.RTCConfiguration(servers).apply {
-                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-            }
-
-            peer = rtcFactory.createPeerConnection(config, observer())
-                ?: throw IllegalStateException("Unable to create WebRTC peer connection")
-
-            if (captureCamera) {
-                track?.let { peer!!.addTrack(it, listOf("FRUGAL_CAMERA")) }
-            } else {
-                // Viewer must explicitly negotiate that it wants to receive video.
-                peer!!.addTransceiver(
-                    MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                    RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
-                )
-            }
-            return peer!!
-        } catch (e: Exception) {
-            onError("WebRTC peer creation failed: ${e.message ?: e::class.simpleName}")
-            throw e
+        val config = PeerConnection.RTCConfiguration(emptyList()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
+        peer = f.createPeerConnection(config, observer()) ?: error("Unable to create PeerConnection")
+        if (captureCamera) {
+            local?.let { peer!!.addTrack(it, listOf("FRUGAL_CAMERA")); it.setEnabled(true) }
+        } else {
+            peer!!.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+            )
+        }
+        return peer!!
+    }
+
+    private fun attachRemote(track: VideoTrack) {
+        if (remote === track) return
+        remote?.let { old -> preview?.let { runCatching { old.removeSink(it) } } }
+        remote = track
+        track.setEnabled(true)
+        preview?.let { track.addSink(it) }
+        onRemoteVideo(track)
     }
 
     private fun observer() = object : PeerConnection.Observer {
         override fun onIceCandidate(c: IceCandidate) = onIce(c)
-
-        override fun onTrack(t: RtpTransceiver?) {
-            val video = t?.receiver?.track() as? VideoTrack ?: return
-            remoteTrack?.let { old -> preview?.let { old.removeSink(it) } }
-            remoteTrack = video
-            video.setEnabled(true)
-            preview?.let { video.addSink(it) }
-            onRemoteVideo(video)
-        }
-
+        override fun onTrack(t: RtpTransceiver?) { (t?.receiver?.track() as? VideoTrack)?.let(::attachRemote) }
+        override fun onAddStream(s: MediaStream?) { s?.videoTracks?.firstOrNull()?.let(::attachRemote) }
         override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) = onConnection(s)
-        override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-        override fun onIceConnectionReceivingChange(r: Boolean) {}
-        override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
-        override fun onIceCandidatesRemoved(c: Array<out IceCandidate>?) {}
-        override fun onAddStream(s: MediaStream?) {}
-        override fun onRemoveStream(s: MediaStream?) {}
-        override fun onDataChannel(d: DataChannel?) {}
-        override fun onRenegotiationNeeded() {}
+        override fun onSignalingChange(s: PeerConnection.SignalingState?) = Unit
+        override fun onIceConnectionReceivingChange(r: Boolean) = Unit
+        override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) = Unit
+        override fun onIceCandidatesRemoved(c: Array<out IceCandidate>?) = Unit
+        override fun onRemoveStream(s: MediaStream?) = Unit
+        override fun onDataChannel(d: DataChannel?) = Unit
+        override fun onRenegotiationNeeded() = Unit
     }
 
     fun createOffer(done: (SessionDescription) -> Unit) {
-        val current = peer ?: run {
-            onError("Cannot create offer before the WebRTC peer exists")
-            return
-        }
-        current.createOffer(object : SdpObserverAdapter() {
+        val p = peer ?: return onError("Peer not ready")
+        val constraints = MediaConstraints().apply { mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true")) }
+        p.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(d: SessionDescription) {
-                current.setLocalDescription(object : SdpObserverAdapter() {
+                p.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() = done(d)
-                    override fun onSetFailure(e: String?) = onError("Setting local offer failed: ${e ?: "unknown error"}")
+                    override fun onSetFailure(e: String?) = onError("Local offer failed: " + (e ?: "unknown"))
                 }, d)
             }
-
-            override fun onCreateFailure(e: String?) = onError("Creating offer failed: ${e ?: "unknown error"}")
-        }, MediaConstraints())
+            override fun onCreateFailure(e: String?) = onError("Offer failed: " + (e ?: "unknown"))
+        }, constraints)
     }
 
     fun createAnswer(done: (SessionDescription) -> Unit) {
-        val current = peer ?: run {
-            onError("Cannot create answer before the WebRTC peer exists")
-            return
-        }
-        current.createAnswer(object : SdpObserverAdapter() {
+        val p = peer ?: return onError("Peer not ready")
+        p.createAnswer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(d: SessionDescription) {
-                current.setLocalDescription(object : SdpObserverAdapter() {
+                p.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() = done(d)
-                    override fun onSetFailure(e: String?) = onError("Setting local answer failed: ${e ?: "unknown error"}")
+                    override fun onSetFailure(e: String?) = onError("Local answer failed: " + (e ?: "unknown"))
                 }, d)
             }
-
-            override fun onCreateFailure(e: String?) = onError("Creating answer failed: ${e ?: "unknown error"}")
+            override fun onCreateFailure(e: String?) = onError("Answer failed: " + (e ?: "unknown"))
         }, MediaConstraints())
     }
 
-    fun setRemote(d: SessionDescription, onSuccess: (() -> Unit)? = null) {
-        val current = peer ?: run {
-            onError("Cannot set remote SDP before the WebRTC peer exists")
-            return
-        }
-        current.setRemoteDescription(object : SdpObserverAdapter() {
+    fun setRemote(d: SessionDescription, done: (() -> Unit)? = null) {
+        val p = peer ?: return onError("Peer not ready")
+        p.setRemoteDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
                 remoteSet = true
-                val pending = queuedIce.toList()
-                queuedIce.clear()
-                pending.forEach { candidate ->
-                    if (!current.addIceCandidate(candidate)) {
-                        Log.w("FrugalCCTV", "Failed to add queued ICE candidate")
-                    }
-                }
-                onSuccess?.invoke()
+                queued.forEach { p.addIceCandidate(it) }
+                queued.clear()
+                done?.invoke()
             }
-
-            override fun onSetFailure(e: String?) {
-                onError("Setting remote SDP failed: ${e ?: "unknown error"}")
-            }
+            override fun onSetFailure(e: String?) = onError("Remote SDP failed: " + (e ?: "unknown"))
         }, d)
     }
 
     fun addIce(c: IceCandidate) {
-        val current = peer
-        if (!remoteSet || current == null) {
-            queuedIce += c
-        } else if (!current.addIceCandidate(c)) {
-            Log.w("FrugalCCTV", "Failed to add ICE candidate")
-        }
+        if (peer == null || !remoteSet) queued += c
+        else peer?.addIceCandidate(c)
     }
 
     fun resetPeer() {
-        queuedIce.clear()
+        queued.clear()
         remoteSet = false
-        remoteTrack?.let { old ->
-            preview?.let { view -> runCatching { old.removeSink(view) } }
-            runCatching { old.dispose() }
-        }
-        remoteTrack = null
+        remote?.let { old -> preview?.let { runCatching { old.removeSink(it) } }; runCatching { old.dispose() } }
+        remote = null
         runCatching { peer?.close() }
         runCatching { peer?.dispose() }
         peer = null
     }
 
     fun release() {
-        runCatching { camera?.stopCapture() }
-        runCatching { camera?.dispose() }
+        resetPeer()
+        runCatching { capturer?.stopCapture() }
+        runCatching { capturer?.dispose() }
         runCatching { helper?.dispose() }
         runCatching { preview?.release() }
-        runCatching { track?.dispose() }
-        runCatching { remoteTrack?.dispose() }
+        runCatching { local?.dispose() }
         runCatching { source?.dispose() }
-        runCatching { peer?.dispose() }
-        camera = null
-        helper = null
-        track = null
-        remoteTrack = null
-        source = null
-        peer = null
-        preview = null
-        queuedIce.clear()
-        remoteSet = false
+        capturer = null; helper = null; local = null; source = null; preview = null
     }
 }
-
 open class SdpObserverAdapter : SdpObserver {
     override fun onCreateSuccess(d: SessionDescription) {}
     override fun onSetSuccess() {}
