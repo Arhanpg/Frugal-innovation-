@@ -12,19 +12,18 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(CameraUiState())
     val state: StateFlow<CameraUiState> = _state.asStateFlow()
 
-    fun configure(url: String, key: String) {
-        val cleanUrl = url.trim().trimEnd('/')
-        val cleanKey = key.trim()
-        prefs.saveConnection(cleanUrl, cleanKey)
-        _state.value = _state.value.copy(configured = cleanUrl.isNotBlank() && cleanKey.isNotBlank(), error = null)
-    }
-
     fun bootstrap() {
-        _state.value = _state.value.copy(
-            configured = prefs.supabaseUrl().isNotBlank() && prefs.supabaseKey().isNotBlank(),
+        _state.value = CameraUiState(
+            cameraHost = prefs.cameraHost(),
+            cameraPort = prefs.cameraPort(),
             armed = prefs.armed(),
             audible = prefs.audible()
         )
+    }
+
+    fun configureEndpoint(host: String, port: Int) {
+        prefs.saveCameraEndpoint(host, port)
+        _state.value = _state.value.copy(cameraHost = host, cameraPort = port, error = null)
     }
 
     fun toggleArmed() {
@@ -41,8 +40,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 data class CameraUiState(
-    val configured: Boolean = false,
-    val armed: Boolean = false,
+    val cameraHost: String = "",
+    val cameraPort: Int = 47678,
+    val armed: Boolean = true,
     val audible: Boolean = false,
     val error: String? = null
 )
