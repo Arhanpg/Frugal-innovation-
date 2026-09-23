@@ -14,19 +14,25 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 
-private const val DISCOVERY_PORT = 47677
-private const val SIGNALING_PORT = 47678
+const val DISCOVERY_PORT = 47677
+const val SIGNALING_PORT = 47678
 private const val MAGIC = "FRUGAL_CCTV_V2"
 private val json = Json { ignoreUnknownKeys = true }
 
-private fun encode(m: SignalMessage): String =
-    Base64.encodeToString(json.encodeToString(SignalMessage.serializer(), m).toByteArray(), Base64.NO_WRAP)
+fun encodeSignalMessage(m: SignalMessage): String =
+    java.util.Base64.getEncoder().encodeToString(json.encodeToString(SignalMessage.serializer(), m).toByteArray(StandardCharsets.UTF_8))
 
-private fun decode(line: String): SignalMessage? = runCatching {
-    json.decodeFromString<SignalMessage>(String(Base64.decode(line, Base64.DEFAULT), StandardCharsets.UTF_8))
+fun decodeSignalMessage(line: String): SignalMessage? = runCatching {
+    val bytes = java.util.Base64.getDecoder().decode(line.trim())
+    json.decodeFromString<SignalMessage>(String(bytes, StandardCharsets.UTF_8))
 }.getOrNull()
 
-data class CameraEndpoint(val host: String, val port: Int = SIGNALING_PORT, val room: String, val cameraId: String)
+data class CameraEndpoint(
+    val host: String,
+    val port: Int = SIGNALING_PORT,
+    val room: String,
+    val cameraId: String
+)
 
 class DirectSignalingServer(
     private val scope: CoroutineScope,
@@ -102,7 +108,8 @@ class DirectSignalingServer(
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
                 writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))
                 while (isActive && alive.get()) {
-                    val m = reader.readLine()?.let(::decode) ?: break
+                    val line = reader.readLine() ?: break
+                    val m = decodeSignalMessage(line) ?: continue
                     if (m.type == "hello") {
                         id = m.from
                         send(SignalMessage("ready", cameraId, to = m.from))
@@ -116,7 +123,7 @@ class DirectSignalingServer(
 
         @Synchronized fun send(m: SignalMessage) {
             if (!alive.get()) return
-            runCatching { writer?.apply { write(encode(m)); newLine(); flush() } }.onFailure { close() }
+            runCatching { writer?.apply { write(encodeSignalMessage(m)); newLine(); flush() } }.onFailure { close() }
         }
 
         fun close() {
@@ -150,7 +157,7 @@ class DirectSignalingClient(
                 val s = Socket().apply {
                     tcpNoDelay = true
                     keepAlive = true
-                    connect(InetSocketAddress(endpoint.host, endpoint.port), 2500)
+                    connect(InetSocketAddress(endpoint.host, endpoint.port), 3000)
                 }
                 socket = s
                 writer = BufferedWriter(OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))
@@ -161,7 +168,7 @@ class DirectSignalingClient(
                     try {
                         while (isActive && !closed.get()) {
                             val line = reader.readLine() ?: break
-                            decode(line)?.let(onMessage)
+                            decodeSignalMessage(line)?.let(onMessage)
                         }
                     } finally {
                         if (!closed.get()) onDisconnected()
@@ -181,7 +188,7 @@ class DirectSignalingClient(
         scope.launch(Dispatchers.IO) {
             synchronized(this@DirectSignalingClient) {
                 if (closed.get()) return@synchronized
-                runCatching { writer?.apply { write(encode(m)); newLine(); flush() } }
+                runCatching { writer?.apply { write(encodeSignalMessage(m)); newLine(); flush() } }
                     .onFailure { onError(it.message ?: "Signaling send failed"); close() }
             }
         }
@@ -234,6 +241,24 @@ class CameraDiscovery(
     }
 
     fun stop() { job?.cancel(); job = null }
+}
+
+fun getLocalIpAddress(): String {
+    runCatching {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        while (interfaces.hasMoreElements()) {
+            val networkInterface = interfaces.nextElement()
+            if (!networkInterface.isUp || networkInterface.isLoopback) continue
+            val addresses = networkInterface.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val addr = addresses.nextElement()
+                if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                    return addr.hostAddress ?: continue
+                }
+            }
+        }
+    }
+    return "Unavailable"
 }
 
 private fun broadcastAddresses(): List<InetAddress> {

@@ -18,7 +18,9 @@ class WebRtcSession(
     companion object {
         private var factory: PeerConnectionFactory? = null
         private var egl: EglBase? = null
-        @Synchronized private fun factory(context: Context): PeerConnectionFactory {
+
+        @Synchronized
+        private fun factory(context: Context): PeerConnectionFactory {
             if (factory == null) {
                 PeerConnectionFactory.initialize(
                     PeerConnectionFactory.InitializationOptions.builder(context.applicationContext).createInitializationOptions()
@@ -31,6 +33,7 @@ class WebRtcSession(
             }
             return factory!!
         }
+
         fun eglContext() = egl?.eglBaseContext
     }
 
@@ -45,10 +48,16 @@ class WebRtcSession(
     private val queued = mutableListOf<IceCandidate>()
     private var remoteSet = false
 
-    init { if (captureCamera) startCamera(context.applicationContext) }
+    init {
+        if (captureCamera) startCamera(context.applicationContext)
+    }
 
     fun attachPreview(view: SurfaceViewRenderer) {
-        preview?.let { old -> runCatching { local?.removeSink(old) }; runCatching { remote?.removeSink(old) }; runCatching { old.release() } }
+        preview?.let { old ->
+            runCatching { local?.removeSink(old) }
+            runCatching { remote?.removeSink(old) }
+            runCatching { old.release() }
+        }
         preview = view
         val e = eglContext() ?: return onError("WebRTC EGL is unavailable")
         runCatching {
@@ -77,6 +86,19 @@ class WebRtcSession(
             onFatalError("Camera capture failed: " + (t.message ?: "unknown"))
             release()
         }
+    }
+
+    fun switchCamera(onSwitched: ((Boolean) -> Unit)? = null) {
+        capturer?.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(isFrontCamera: Boolean) {
+                preview?.setMirror(isFrontCamera)
+                onSwitched?.invoke(isFrontCamera)
+            }
+
+            override fun onCameraSwitchError(errorDescription: String?) {
+                onError("Camera switch failed: " + (errorDescription ?: "unknown"))
+            }
+        })
     }
 
     fun createPeer(ice: IceConfig = IceConfig()): PeerConnection {
@@ -130,6 +152,7 @@ class WebRtcSession(
                     override fun onSetFailure(e: String?) = onError("Local offer failed: " + (e ?: "unknown"))
                 }, d)
             }
+
             override fun onCreateFailure(e: String?) = onError("Offer failed: " + (e ?: "unknown"))
         }, constraints)
     }
@@ -143,6 +166,7 @@ class WebRtcSession(
                     override fun onSetFailure(e: String?) = onError("Local answer failed: " + (e ?: "unknown"))
                 }, d)
             }
+
             override fun onCreateFailure(e: String?) = onError("Answer failed: " + (e ?: "unknown"))
         }, MediaConstraints())
     }
@@ -156,6 +180,7 @@ class WebRtcSession(
                 queued.clear()
                 done?.invoke()
             }
+
             override fun onSetFailure(e: String?) = onError("Remote SDP failed: " + (e ?: "unknown"))
         }, d)
     }
@@ -186,6 +211,7 @@ class WebRtcSession(
         capturer = null; helper = null; local = null; source = null; preview = null
     }
 }
+
 open class SdpObserverAdapter : SdpObserver {
     override fun onCreateSuccess(d: SessionDescription) {}
     override fun onSetSuccess() {}
