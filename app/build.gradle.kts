@@ -1,3 +1,4 @@
+
 import java.util.Properties
 
 plugins {
@@ -7,9 +8,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-val localProps = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load) }
-fun localValue(name: String) = localProps.getProperty(name, "")
-
 android {
     namespace = "com.arhan.frugalcctv"
     compileSdk = 35
@@ -17,10 +15,8 @@ android {
         applicationId = "com.arhan.frugalcctv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
-        buildConfigField("String", "DEFAULT_SUPABASE_URL", "\"${localValue("FRUGAL_SUPABASE_URL")}\"")
-        buildConfigField("String", "DEFAULT_SUPABASE_KEY", "\"${localValue("FRUGAL_SUPABASE_KEY")}\"")
+        versionCode = 5
+        versionName = "1.4.0"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -41,9 +37,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("io.github.webrtc-sdk:android:144.7559.09")
-    implementation(platform("io.github.jan-tennert.supabase:bom:3.0.2"))
-    implementation("io.github.jan-tennert.supabase:realtime-kt")
-    implementation("io.ktor:ktor-client-android:3.0.1")
     implementation("com.google.mlkit:image-labeling:17.0.9")
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
