@@ -1,65 +1,55 @@
 # FrugalCCTV
 
-An old Android phone becomes a smart CCTV camera.
+An old Android phone becomes a smart CCTV camera with direct Android-to-Android streaming.
 
 ## Architecture
 
-**Camera phone:** native WebRTC capture → local ML Kit person detection → foreground camera service.
+**Camera:** Camera2/WebRTC capture → fast local frame analysis → Google ML Kit person classification → Android alert.
 
-**Viewer phone:** native WebRTC receive → live Compose UI.
+**Viewer:** local UDP camera discovery → direct TCP signaling → WebRTC receive → Compose live view.
 
-**Cloud:** Supabase Realtime carries only WebRTC signaling messages. No video is uploaded to Supabase.
+**Cloud:** none. Supabase is removed from the runtime. Video and security alerts are not sent to a cloud service.
 
-### Included features
+## Features
 
-- Camera mode + viewer mode in one Android app.
-- 10-character randomly generated room codes.
-- 960×540 @ 20 fps camera capture to keep an old phone's load reasonable.
-- P2P WebRTC live video with built-in STUN.
-- Optional TURN configuration for difficult NATs.
-- On-device ML Kit object detection in streaming mode.
-- Person-detected alerts when protection is armed.
-- Local high-priority Android alert notification.
-- Optional audible local alarm.
-- Foreground camera service compliant with modern Android camera-service rules.
-- Jetpack Compose UI.
-- MVVM-oriented separation of domain/data/service/UI concerns.
+- Camera mode and Viewer mode in one Android app.
+- Room-code pairing.
+- Automatic LAN camera discovery.
+- Direct TCP signaling for WebRTC SDP/ICE and alerts.
+- WebRTC video stays peer-to-peer.
+- 640×360 at 20 FPS capture for low latency on older phones.
+- Google ML Kit person classification.
+- Fast per-frame motion analysis.
+- Camera movement/repositioning detection.
+- Sudden darkening detection.
+- Possible lens obstruction detection.
+- High-priority Android security notifications.
+- Optional audible alarm.
+- Foreground camera service.
+- Kotlin + Jetpack Compose.
 
-## Important limitation
+## Pairing
 
-A generic object detector is not a complete "bad event" detector. v1 deliberately uses a clear, explainable rule: **person detected while protection is armed**. A future project phase can add a custom LiteRT/TFLite model trained on your actual home (for example: person + package + smoke/fire + fall detection).
+1. Put both Android phones on the same Wi-Fi/LAN.
+2. Start Camera mode on the old phone and choose a room code.
+3. Start Viewer mode on the second phone and enter the same room code.
+4. The viewer listens for the camera's LAN beacon, opens the direct signaling connection, negotiates WebRTC, and displays the video.
 
-## Supabase setup
+If the router blocks client-to-client traffic or broadcast discovery, automatic discovery cannot work. The architecture is intentionally cloud-free; the appropriate fallback is a manually entered LAN address or a VPN that places both devices on the same reachable network.
 
-1. Create a Supabase project.
-2. Leave public Realtime channels enabled for v1.
-3. Copy the project URL and publishable key into the app setup screen.
-4. For hardened deployments, migrate the room channel to private Realtime channels and add RLS authorization.
+## Detection pipeline
 
-Supabase's current Kotlin SDK provides the Realtime channel/broadcast APIs used here. See the official Kotlin and Realtime documentation.
+The camera has two independent paths:
 
-## Android Studio
+1. **Fast path:** a tiny 24×14 luma sample is analyzed on every video frame for movement and tamper signals. This path does not wait for ML.
+2. **ML path:** Google ML Kit runs asynchronously on a 256×144 image approximately every 180 ms when the previous inference has completed.
 
-Use Android Studio **Quail 4 / 2026.1.4** (or compatible) with JDK 17. The repository uses AGP 9.4.0 and Gradle 9.6.0.
+This prevents AI inference from blocking camera capture or WebRTC.
 
-### Build in Android Studio
+## Important network limitation
 
-Open the repository as an existing Gradle project, let Android Studio sync, then use **Build → Generate App Bundles or APKs → Generate APKs**. The debug APK is written to:
+A completely third-party-free Internet CCTV system cannot universally connect two phones behind arbitrary NAT/firewalls. Direct host ICE works when the devices can directly reach one another, especially on the same LAN. Internet-wide connectivity requires network infrastructure such as a VPN, port forwarding, STUN/TURN, or a signaling service. This build deliberately chooses the independent LAN-first architecture rather than silently adding a paid cloud dependency.
 
-`app/build/outputs/apk/debug/app-debug.apk`
+## Build
 
-### Command-line build
-
-Install Gradle 9.6.0 and Android SDK Platform 37 + Build Tools 36.0.0, then run:
-
-```bash
-gradle assembleDebug
-```
-
-GitHub Actions performs the same build automatically and uploads the APK as `frugal-cctv-debug-apk`.
-
-## Real-world reliability
-
-Android requires the camera foreground service to be started while the app is visible and with camera permission. The app therefore starts protection from the Camera setup screen instead of pretending it can silently start camera access after reboot.
-
-Some networks cannot establish a direct WebRTC path with STUN alone. The UI accepts TURN servers for that case.
+The project targets Android API 35, uses JDK 17, Kotlin/Compose, WebRTC SDK, and Google ML Kit. GitHub Actions is the authoritative Android build check.
