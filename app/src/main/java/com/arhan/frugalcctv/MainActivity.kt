@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.*
 import android.content.pm.PackageManager
 import android.os.*
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -672,14 +673,19 @@ private class ViewerController(
 
     private val signaling = DirectSignalingClient(
         scope, room, id, ::handle,
-        { state("Signaling connected — negotiating…") },
-        { if (scope.isActive) state("Camera disconnected") },
-        { state("Signaling error: " + it) }
+        { state("LAN Signaling connected") },
+        { if (scope.isActive) state("LAN Camera disconnected") },
+        { Log.d("FrugalCCTV", "LAN Signaling error: $it") }
+    )
+
+    private val globalSignaling = GlobalSignalingChannel(
+        scope, room, id, ::handle,
+        { state(it) }
     )
 
     private val rtc = WebRtcSession(
         app, false,
-        onIce = { c -> signaling.send(SignalMessage("ice", id, cameraId, candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) },
+        onIce = { c -> sendSignal(SignalMessage("ice", id, cameraId, candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) },
         onRemoteVideo = { state("Live video received") },
         onConnection = { s ->
             when (s) {
@@ -694,12 +700,19 @@ private class ViewerController(
     )
 
     fun start() {
+        globalSignaling.start()
+
+        scope.launch {
+            delay(1000)
+            sendSignal(SignalMessage("hello", id, text = room.uppercase()))
+        }
+
         if (manualIp.isNotBlank()) {
             state("Connecting directly to $manualIp…")
             endpoint = CameraEndpoint(manualIp, SIGNALING_PORT, room, "manual")
             signaling.connect(endpoint!!)
         } else {
-            state("Searching for camera on local network…")
+            state("Searching for camera (Local & Internet)…")
             discovery = CameraDiscovery(scope, room, { found ->
                 if (endpoint == null) {
                     endpoint = found
@@ -708,9 +721,14 @@ private class ViewerController(
                     discovery?.stop()
                     signaling.connect(found)
                 }
-            }, { state("Discovery failed — retry connection or check Wi-Fi") })
+            }, { Log.d("FrugalCCTV", "LAN discovery timeout") })
             discovery?.start()
         }
+    }
+
+    private fun sendSignal(msg: SignalMessage) {
+        signaling.send(msg)
+        globalSignaling.send(msg)
     }
 
     private fun handle(m: SignalMessage) {
@@ -732,24 +750,26 @@ private class ViewerController(
         cameraId = remote
         rtc.resetPeer()
         rtc.createPeer()
-        rtc.createOffer { offer -> signaling.send(SignalMessage("offer", id, remote, sdp = offer.description)) }
+        rtc.createOffer { offer -> sendSignal(SignalMessage("offer", id, remote, sdp = offer.description)) }
     }
 
     fun reconnect() {
         negotiating = false
         rtc.resetPeer()
+        sendSignal(SignalMessage("hello", id, text = room.uppercase()))
         endpoint?.let { signaling.connect(it) } ?: start()
     }
 
     fun attachPreview(v: SurfaceViewRenderer) = rtc.attachPreview(v)
-    fun setArmed(value: Boolean) = signaling.send(SignalMessage("arm", id, cameraId, armed = value))
-    fun setTorch(value: Boolean) = signaling.send(SignalMessage("torch", id, cameraId, torch = value))
-    fun flipCamera() = signaling.send(SignalMessage("flip", id, cameraId))
-    fun setSiren(value: Boolean) = signaling.send(SignalMessage("siren", id, cameraId, siren = value))
+    fun setArmed(value: Boolean) = sendSignal(SignalMessage("arm", id, cameraId, armed = value))
+    fun setTorch(value: Boolean) = sendSignal(SignalMessage("torch", id, cameraId, torch = value))
+    fun flipCamera() = sendSignal(SignalMessage("flip", id, cameraId))
+    fun setSiren(value: Boolean) = sendSignal(SignalMessage("siren", id, cameraId, siren = value))
 
     fun release() {
         discovery?.stop()
         signaling.close()
+        globalSignaling.close()
         rtc.release()
         scope.cancel()
     }

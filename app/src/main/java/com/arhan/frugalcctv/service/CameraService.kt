@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.arhan.frugalcctv.data.AppPreferences
 import com.arhan.frugalcctv.data.DirectSignalingServer
+import com.arhan.frugalcctv.data.GlobalSignalingChannel
 import com.arhan.frugalcctv.data.getLocalIpAddress
 import com.arhan.frugalcctv.domain.*
 import com.arhan.frugalcctv.web.WebRtcSession
@@ -21,6 +22,7 @@ import org.webrtc.*
 class CameraService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var signaling: DirectSignalingServer? = null
+    private var globalSignaling: GlobalSignalingChannel? = null
     private var rtc: WebRtcSession? = null
     private var detector: ThreatDetector? = null
     private var settings = SecuritySettings()
@@ -60,7 +62,7 @@ class CameraService : Service() {
         )
         val n = NotificationCompat.Builder(this, channel)
             .setContentTitle("FrugalCCTV camera active")
-            .setContentText("Direct LAN CCTV streaming in progress")
+            .setContentText("CCTV streaming active (Local & Global Internet)")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .build()
@@ -87,7 +89,7 @@ class CameraService : Service() {
         }
 
         rtc = WebRtcSession(this, true,
-            onIce = { c -> signaling?.send(SignalMessage("ice", id, viewerId, candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) },
+            onIce = { c -> sendSignal(SignalMessage("ice", id, viewerId, candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) },
             onRemoteVideo = {},
             onConnection = {},
             onFrame = { detector?.onFrame(it) },
@@ -96,8 +98,14 @@ class CameraService : Service() {
         )
 
         signaling = DirectSignalingServer(scope, room, id, { m -> handle(m, id) }, { if (it == 0) viewerId = null }, { failStart(it) }).also { it.start() }
+        globalSignaling = GlobalSignalingChannel(scope, room, id, { m -> handle(m, id) }).also { it.start() }
 
         startTelemetry(id)
+    }
+
+    private fun sendSignal(msg: SignalMessage) {
+        signaling?.send(msg)
+        globalSignaling?.send(msg)
     }
 
     private fun startTelemetry(deviceId: String) {
@@ -116,7 +124,7 @@ class CameraService : Service() {
                         charging = isCharging,
                         ipAddress = getLocalIpAddress()
                     )
-                    signaling?.send(msg)
+                    sendSignal(msg)
                 }
                 delay(3000)
             }
@@ -127,7 +135,7 @@ class CameraService : Service() {
         when (m.type) {
             "hello" -> {
                 viewerId = m.from
-                signaling?.send(SignalMessage("ready", id, m.from))
+                sendSignal(SignalMessage("ready", id, m.from))
                 sendState(id, m.from)
             }
             "offer" -> {
@@ -137,7 +145,7 @@ class CameraService : Service() {
                     rtc?.createPeer()
                     val sdp = m.sdp ?: return
                     rtc?.setRemote(SessionDescription(SessionDescription.Type.OFFER, sdp)) {
-                        rtc?.createAnswer { answer -> signaling?.send(SignalMessage("answer", id, m.from, sdp = answer.description)) }
+                        rtc?.createAnswer { answer -> sendSignal(SignalMessage("answer", id, m.from, sdp = answer.description)) }
                     }
                 } catch (t: Throwable) {
                     Log.e("FrugalCCTV", "Offer handling failed", t)
@@ -164,7 +172,7 @@ class CameraService : Service() {
     }
 
     private fun sendState(id: String, toId: String?) {
-        signaling?.send(
+        sendSignal(
             SignalMessage(
                 type = "status",
                 from = id,
@@ -181,7 +189,7 @@ class CameraService : Service() {
 
     fun setTorch(enable: Boolean) {
         runCatching {
-            val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
             val backCameraId = cameraManager.cameraIdList.firstOrNull { id ->
                 val chars = cameraManager.getCameraCharacteristics(id)
                 chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true &&
@@ -222,7 +230,7 @@ class CameraService : Service() {
         if (now - last < cooldown) return
         if (event.severity == Severity.CRITICAL) criticalAt = now else warningAt = now
         val id = AppPreferences(this).deviceId()
-        signaling?.send(SignalMessage("alert", id, viewerId, text = event.message))
+        sendSignal(SignalMessage("alert", id, viewerId, text = event.message))
         AlertNotifier.notify(this, "FrugalCCTV alert", event.message, settings.audibleAlarm)
     }
 
@@ -248,6 +256,7 @@ class CameraService : Service() {
         setTorch(false)
         runCatching { rtc?.release() }; rtc = null
         signaling?.close(); signaling = null
+        globalSignaling?.close(); globalSignaling = null
         detector?.close(); detector = null
         viewerId = null; preview = null
     }
