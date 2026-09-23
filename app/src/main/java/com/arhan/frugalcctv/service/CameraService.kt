@@ -3,100 +3,121 @@ package com.arhan.frugalcctv.service
 import android.app.*
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioManager
-import android.media.ToneGenerator
-import android.os.Binder
-import android.os.Build
-import android.os.IBinder
+import android.os.*
 import androidx.core.app.NotificationCompat
 import com.arhan.frugalcctv.data.AppPreferences
-import com.arhan.frugalcctv.data.RoomLeaseRepository
-import com.arhan.frugalcctv.data.SignalingRepository
-import com.arhan.frugalcctv.domain.IceConfig
-import com.arhan.frugalcctv.domain.SecuritySettings
-import com.arhan.frugalcctv.domain.SignalMessage
+import com.arhan.frugalcctv.data.DirectSignalingServer
+import com.arhan.frugalcctv.domain.*
 import com.arhan.frugalcctv.web.WebRtcSession
 import kotlinx.coroutines.*
-import org.webrtc.PeerConnection
-import org.webrtc.SurfaceViewRenderer
+import org.webrtc.*
 
 class CameraService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var signaling: SignalingRepository? = null
-    private var lease: RoomLeaseRepository? = null
-    private var heartbeatJob: Job? = null
+    private var signaling: DirectSignalingServer? = null
     private var rtc: WebRtcSession? = null
     private var detector: ThreatDetector? = null
     private var settings = SecuritySettings()
-    private var preview: SurfaceViewRenderer? = null
-    private var lastAlert = 0L
-    private var tone: ToneGenerator? = null
     private var running = false
+    private var viewerId: String? = null
+    private var preview: SurfaceViewRenderer? = null
+    private var room = ""
+    private var criticalAt = 0L
+    private var warningAt = 0L
 
     inner class LocalBinder : Binder() { fun getService() = this@CameraService }
-    override fun onBind(intent: Intent): IBinder = LocalBinder()
+    override fun onBind(i: Intent): IBinder = LocalBinder()
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val channelId = "frugal_camera"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channelId, "FrugalCCTV Camera", NotificationManager.IMPORTANCE_LOW))
-        val notification = NotificationCompat.Builder(this, channelId).setContentTitle("FrugalCCTV camera").setContentText("Camera is running").setSmallIcon(android.R.drawable.ic_menu_camera).setOngoing(true).build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) else startForeground(1, notification)
+    override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
+        val channel = "frugal_camera"
+        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel, "FrugalCCTV Camera", NotificationManager.IMPORTANCE_LOW))
+        val n = NotificationCompat.Builder(this, channel).setContentTitle("FrugalCCTV camera").setContentText("Direct local streaming is running").setSmallIcon(android.R.drawable.ic_menu_camera).setOngoing(true).build()
+        if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) else startForeground(1, n)
         return START_NOT_STICKY
     }
 
-    fun start(url: String, key: String, room: String, ice: IceConfig, security: SecuritySettings, state: (PeerConnection.IceConnectionState) -> Unit = {}) {
+    fun start(roomCode: String, security: SecuritySettings) {
         if (running) return
-        val normalizedUrl = url.trim(); val normalizedKey = key.trim(); val normalizedRoom = room.trim().uppercase()
-        if (normalizedUrl.isBlank() || normalizedKey.isBlank() || normalizedRoom.isBlank()) { failStart("Supabase URL, publishable key and room code are required"); return }
-        running = true; settings = security; tone = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-        val prefs = AppPreferences(this); val deviceId = prefs.deviceId(); val roomLease = RoomLeaseRepository(normalizedUrl, normalizedKey, normalizedRoom, deviceId); lease = roomLease
-        scope.launch {
-            try {
-                if (!roomLease.claim()) { failStart(roomLease.lastError() ?: "Room $normalizedRoom is already in use or could not be claimed"); return@launch }
-                heartbeatJob = launch { while (isActive && running) { delay(5_000L); if (roomLease.heartbeat() != true) { failStart(roomLease.lastError() ?: "Camera room lease heartbeat failed"); break } } }
-                startStreaming(normalizedUrl, normalizedKey, normalizedRoom, IceConfig(prefs.turnUrls(), prefs.turnUser(), prefs.turnPassword()).let { if (it.turnUrls.isEmpty()) ice else it }, state, deviceId)
-            } catch (t: Throwable) { failStart(t.message ?: t::class.simpleName ?: "Camera startup failed") }
-        }
-    }
+        room = roomCode.trim().uppercase()
+        if (room.isBlank()) return failStart("Room code is required")
+        running = true
+        settings = security
+        viewerId = null
+        val id = AppPreferences(this).deviceId()
 
-    private fun startStreaming(url: String, key: String, room: String, ice: IceConfig, state: (PeerConnection.IceConnectionState) -> Unit, deviceId: String) {
-        signaling = SignalingRepository(url, key, room, scope, deviceId)
         detector = ThreatDetector(settings.confidenceThreshold) { event ->
-            if (!settings.armed) return@ThreatDetector
-            val now = System.currentTimeMillis(); if (now - lastAlert < 15_000L) return@ThreatDetector; lastAlert = now
-            scope.launch { val sender = signaling ?: return@launch; runCatching { sender.send(SignalMessage("alert", sender.id(), text = event.message)) }; AlertNotifier.notify(this@CameraService, "FrugalCCTV alert", event.message, playTone = settings.audibleAlarm) }
+            if (settings.armed) publish(event)
         }
+
         rtc = WebRtcSession(this, true,
-            onIce = { c -> scope.launch { signaling?.send(SignalMessage("ice", signaling?.id() ?: "", candidate = c.sdp, sdpMid = c.sdpMid, sdpMLineIndex = c.sdpMLineIndex)) } },
+            onIce = { c -> signaling?.send(SignalMessage("ice", id, viewerId, candidate=c.sdp, sdpMid=c.sdpMid, sdpMLineIndex=c.sdpMLineIndex)) },
             onRemoteVideo = {},
-            onConnection = state,
+            onConnection = {},
             onFrame = { detector?.onFrame(it) },
-            onError = { android.util.Log.e("FrugalCCTV", "WebRTC error: $it") },
+            onError = { Log.e("FrugalCCTV", it) },
             onFatalError = { failStart(it) }
         )
-        preview?.let { rtc?.attachPreview(it) }
-        signaling?.start(role = "camera", onMessage = { msg ->
-            when (msg.type) {
-                "hello" -> scope.launch { val sender = signaling ?: return@launch; sender.send(SignalMessage("ready", sender.id(), to = msg.from)); sender.send(SignalMessage("arm", sender.id(), to = msg.from, armed = settings.armed)) }
-                "offer" -> try { rtc?.resetPeer(); rtc?.createPeer(ice); msg.sdp?.let { sdp -> rtc?.setRemote(org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.OFFER, sdp)) { rtc?.createAnswer { answer -> scope.launch { signaling?.send(SignalMessage("answer", signaling?.id() ?: "", to = msg.from, sdp = answer.description)) } } } } } catch (e: Exception) { failStart(e.message ?: "WebRTC negotiation failed") }
-                "ice" -> msg.candidate?.let { rtc?.addIce(org.webrtc.IceCandidate(msg.sdpMid ?: "", msg.sdpMLineIndex ?: 0, it)) }
-                "arm" -> settings = settings.copy(armed = msg.armed ?: false)
-            }
-        })
+
+        signaling = DirectSignalingServer(scope, room, id, { m -> handle(m, id) }, { if (it == 0) viewerId = null }, { failStart(it) }).also { it.start() }
     }
 
-    private fun failStart(reason: String) {
-        if (!running) return
-        running = false; heartbeatJob?.cancel(); heartbeatJob = null
-        val message = "Camera could not start: ${reason.take(260)}"; runCatching { AlertNotifier.notify(this, "FrugalCCTV camera error", message, playTone = false) }
-        stopCameraResources(); lease?.let { current -> scope.launch { current.release(); current.close() } }; lease = null; stopSelf()
+    private fun handle(m: SignalMessage, id: String) {
+        when (m.type) {
+            "hello" -> {
+                viewerId = m.from
+                signaling?.send(SignalMessage("ready", id, m.from))
+                signaling?.send(SignalMessage("arm", id, m.from, armed=settings.armed))
+            }
+            "offer" -> {
+                viewerId = m.from
+                try {
+                    rtc?.resetPeer()
+                    rtc?.createPeer()
+                    val sdp = m.sdp ?: return
+                    rtc?.setRemote(SessionDescription(SessionDescription.Type.OFFER, sdp)) {
+                        rtc?.createAnswer { answer -> signaling?.send(SignalMessage("answer", id, m.from, sdp=answer.description)) }
+                    }
+                } catch (t: Throwable) {
+                    Log.e("FrugalCCTV", "Offer handling failed", t)
+                    rtc?.resetPeer()
+                }
+            }
+            "ice" -> m.candidate?.let { rtc?.addIce(IceCandidate(m.sdpMid ?: "", m.sdpMLineIndex ?: 0, it)) }
+            "arm" -> if (m.from == viewerId) settings = settings.copy(armed=m.armed ?: false)
+        }
     }
-    fun attachPreview(view: SurfaceViewRenderer) { preview = view; rtc?.attachPreview(view) }
-    fun setArmed(value: Boolean) { settings = settings.copy(armed = value) }
-    fun setAudible(value: Boolean) { settings = settings.copy(audibleAlarm = value) }
-    fun isArmed() = settings.armed
-    fun isAudible() = settings.audibleAlarm
-    fun stopCamera() { if (!running) { stopSelf(); return }; running = false; heartbeatJob?.cancel(); heartbeatJob = null; val currentLease = lease; scope.launch { currentLease?.release(); stopCameraResources(); currentLease?.close(); lease = null; stopSelf() } }
-    private fun stopCameraResources() { runCatching { rtc?.release() }; rtc = null; signaling?.close(); signaling = null; detector?.close(); detector = null; tone?.release(); tone = null; preview = null }
-    override fun onDestroy() { running = false; heartbeatJob?.cancel(); val currentLease = lease; stopCameraResources(); if (currentLease != null) scope.launch { currentLease.release(); currentLease.close() }; scope.cancel(); super.onDestroy() }
+
+    private fun publish(event: SecurityEvent) {
+        val now=System.currentTimeMillis()
+        val cooldown=if(event.severity==Severity.CRITICAL) 3000L else 4000L
+        val last=if(event.severity==Severity.CRITICAL) criticalAt else warningAt
+        if(now-last<cooldown)return
+        if(event.severity==Severity.CRITICAL)criticalAt=now else warningAt=now
+        val id=AppPreferences(this).deviceId()
+        signaling?.send(SignalMessage("alert",id,viewerId,text=event.message))
+        AlertNotifier.notify(this,"FrugalCCTV alert",event.message,settings.audibleAlarm)
+    }
+
+    private fun failStart(reason:String) {
+        if(!running)return
+        running=false
+        AlertNotifier.notify(this,"FrugalCCTV camera error",reason.take(240),false)
+        stopResources()
+        stopSelf()
+    }
+
+    fun attachPreview(v:SurfaceViewRenderer){preview=v;rtc?.attachPreview(v)}
+    fun setArmed(v:Boolean){settings=settings.copy(armed=v)}
+    fun setAudible(v:Boolean){settings=settings.copy(audibleAlarm=v)}
+    fun isArmed()=settings.armed
+    fun isAudible()=settings.audibleAlarm
+    fun stopCamera(){running=false;stopResources();stopSelf()}
+
+    private fun stopResources(){
+        runCatching{rtc?.release()};rtc=null
+        signaling?.close();signaling=null
+        detector?.close();detector=null
+        viewerId=null;preview=null
+    }
+    override fun onDestroy(){running=false;stopResources();scope.cancel();super.onDestroy()}
 }
